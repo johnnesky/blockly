@@ -17,7 +17,11 @@ export type ProcedureTuple = [string, string[], boolean];
  */
 export interface ProcedureBlock {
   getProcedureCall: () => string;
-  renameProcedure: (p1: string, p2: string) => void;
+  renameProcedure: (
+    p1: string,
+    p2: string,
+    asIntermediateEvent?: boolean,
+  ) => void;
   getProcedureDef: () => ProcedureTuple;
 }
 

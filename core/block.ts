@@ -1206,12 +1206,16 @@ export class Block implements IASTNodeLocation, IDeletable {
    * @param newValue The value to set.
    * @param name The name of the field to set the value of.
    */
-  setFieldValue(newValue: AnyDuringMigration, name: string) {
+  setFieldValue(
+    newValue: AnyDuringMigration,
+    name: string,
+    fireChangeEvent: boolean = true,
+  ) {
     const field = this.getField(name);
     if (!field) {
       throw Error('Field "' + name + '" not found.');
     }
-    field.setValue(newValue);
+    field.setValue(newValue, fireChangeEvent);
   }
 
   /**

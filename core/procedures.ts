@@ -15,6 +15,7 @@ import {Blocks} from './blocks.js';
 import * as common from './common.js';
 import type {Abstract} from './events/events_abstract.js';
 import type {BubbleOpen} from './events/events_bubble_open.js';
+import * as deprecation from './utils/deprecation.js';
 import * as eventUtils from './events/utils.js';
 import {Field, UnattachedFieldError} from './field.js';
 import {Msg} from './msg.js';
@@ -191,12 +192,31 @@ export function isNameUsed(
 }
 
 /**
- * Rename a procedure.  Called by the editable field.
+ * @deprecated v10.4.4 - Rename a procedure.  Called by the editable field.
  *
  * @param name The proposed new name.
  * @returns The accepted name.
  */
 export function rename(this: Field, name: string): string {
+  deprecation.warn('rename', 'v10.4.4', 'v12', 'validateProcedureName');
+  const legalName = validateProcedureName.call(this, name);
+  const oldName = this.getValue();
+  renameProcedureBlocksInWorkspace(
+    this.getSourceBlock()!.workspace,
+    oldName,
+    legalName,
+    /* asIntermediateEvent= */ false,
+  );
+  return legalName;
+}
+
+/**
+ * Validate a procedure name. Called by the editable field.
+ *
+ * @param name The proposed new name.
+ * @returns The accepted name.
+ */
+export function validateProcedureName(this: Field, name: string): string {
   const block = this.getSourceBlock();
   if (!block) {
     throw new UnattachedFieldError();
@@ -209,19 +229,71 @@ export function rename(this: Field, name: string): string {
   if (isProcedureBlock(block) && !block.isInsertionMarker()) {
     block.getProcedureModel().setName(legalName);
   }
-  const oldName = this.getValue();
-  if (oldName !== name && oldName !== legalName) {
+  return legalName;
+}
+
+/**
+ * Renames any matching procedure call blocks in the workspace.
+ *
+ * @param workspace The workspace to update.
+ * @param oldName The old name of the procedure def.
+ * @param newName The new name of the procedure def.
+ * @param asIntermediateEvent Whether to fire change or intermediate change events.
+ */
+export function renameProcedureBlocksInWorkspace(
+  workspace: Workspace,
+  oldName: string,
+  newName: string,
+  asIntermediateEvent: boolean,
+) {
+  if (oldName !== newName) {
     // Rename any callers.
-    const blocks = block.workspace.getAllBlocks(false);
+    const blocks = workspace.getAllBlocks(false);
     for (let i = 0; i < blocks.length; i++) {
       // Assume it is a procedure so we can check.
       const procedureBlock = blocks[i] as unknown as ProcedureBlock;
       if (procedureBlock.renameProcedure) {
-        procedureBlock.renameProcedure(oldName as string, legalName);
+        // Inhibit firing the normal change events when changing the name of the call blocks. Special events will be fired instead, see below.
+        procedureBlock.renameProcedure(
+          oldName as string,
+          newName,
+          /* fireChangeEvent= */ false,
+        );
+
+        // If the call block was successfully renamed to the new name, then fire an event.
+        if (
+          Names.equals(procedureBlock.getProcedureCall(), newName) &&
+          eventUtils.isEnabled() &&
+          oldName !== newName
+        ) {
+          if (asIntermediateEvent) {
+            // Fire a special event indicating that the value changed but the change
+            // isn't complete yet and normal field change listeners can wait.
+            eventUtils.fire(
+              new (eventUtils.get(eventUtils.BLOCK_FIELD_INTERMEDIATE_CHANGE))(
+                procedureBlock,
+                'NAME',
+                oldName,
+                newName,
+              ),
+            );
+          } else {
+            // Fire an event indicating that the
+            // user has completed a sequence of changes to the name.
+            eventUtils.fire(
+              new (eventUtils.get(eventUtils.BLOCK_CHANGE))(
+                procedureBlock,
+                'field',
+                'NAME',
+                oldName,
+                newName,
+              ),
+            );
+          }
+        }
       }
     }
   }
-  return legalName;
 }
 
 /**

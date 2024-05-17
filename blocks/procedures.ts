@@ -20,6 +20,7 @@ import type {BlockSvg} from '../core/block_svg.js';
 import type {BlockCreate} from '../core/events/events_block_create.js';
 import type {BlockChange} from '../core/events/events_block_change.js';
 import type {BlockDefinition} from '../core/blocks.js';
+import type {BlockFieldIntermediateChange} from '../core/events/events_block_field_intermediate_change.js';
 import type {Connection} from '../core/connection.js';
 import type {
   ContextMenuOption,
@@ -483,6 +484,58 @@ const PROCEDURE_DEF_COMMON = {
       }
     }
   },
+  /**
+   * When a procedure def's name changes, then all associated call blocks should also change.
+   *
+   * @param event Change event.
+   */
+  onchange: function (this: ProcedureBlock & BlockSvg, event: AbstractEvent) {
+    if (!this.workspace || this.workspace.isFlyout) {
+      // Block is deleted or is in a flyout.
+      return;
+    }
+
+    // Do not record name change propogation to the undo history. It is sufficient to keep only the initial change in the history and recreate the derived changes here.
+    const oldRecordUndo = eventUtils.getRecordUndo();
+    eventUtils.setRecordUndo(false);
+
+    if (event.type === Events.BLOCK_CHANGE) {
+      const blockChangeEvent = event as BlockChange;
+      if (
+        blockChangeEvent.element === 'field' &&
+        blockChangeEvent.name === 'NAME' &&
+        blockChangeEvent.blockId === this.id
+      ) {
+        const oldGroup = Events.getGroup();
+        Events.setGroup(event.group);
+        Procedures.renameProcedureBlocksInWorkspace(
+          this.workspace,
+          blockChangeEvent.oldValue as string,
+          blockChangeEvent.newValue as string,
+          /* asIntermediateEvent= */ false,
+        );
+        Events.setGroup(oldGroup);
+      }
+    } else if (event.type === Events.BLOCK_FIELD_INTERMEDIATE_CHANGE) {
+      const intermediateChangeEvent = event as BlockFieldIntermediateChange;
+      if (
+        intermediateChangeEvent.name === 'NAME' &&
+        intermediateChangeEvent.blockId === this.id
+      ) {
+        const oldGroup = Events.getGroup();
+        Events.setGroup(event.group);
+        Procedures.renameProcedureBlocksInWorkspace(
+          this.workspace,
+          intermediateChangeEvent.oldValue as string,
+          intermediateChangeEvent.newValue as string,
+          /* asIntermediateEvent= */ true,
+        );
+        Events.setGroup(oldGroup);
+      }
+    }
+
+    eventUtils.setRecordUndo(oldRecordUndo);
+  },
 };
 
 blocks['procedures_defnoreturn'] = {
@@ -496,7 +549,7 @@ blocks['procedures_defnoreturn'] = {
       type: 'field_input',
       text: initName,
     }) as FieldTextInput;
-    nameField!.setValidator(Procedures.rename);
+    nameField.setValidator(Procedures.validateProcedureName);
     nameField.setSpellcheck(false);
     this.appendDummyInput()
       .appendField(Msg['PROCEDURES_DEFNORETURN_TITLE'])
@@ -544,7 +597,7 @@ blocks['procedures_defreturn'] = {
       type: 'field_input',
       text: initName,
     }) as FieldTextInput;
-    nameField.setValidator(Procedures.rename);
+    nameField.setValidator(Procedures.validateProcedureName);
     nameField.setSpellcheck(false);
     this.appendDummyInput()
       .appendField(Msg['PROCEDURES_DEFRETURN_TITLE'])
@@ -789,9 +842,10 @@ const PROCEDURE_CALL_COMMON = {
     this: CallBlock,
     oldName: string,
     newName: string,
+    fireChangeEvent: boolean = true,
   ) {
     if (Names.equals(oldName, this.getProcedureCall())) {
-      this.setFieldValue(newName, 'NAME');
+      this.setFieldValue(newName, 'NAME', fireChangeEvent);
       const baseMsg = this.outputConnection
         ? Msg['PROCEDURES_CALLRETURN_TOOLTIP']
         : Msg['PROCEDURES_CALLNORETURN_TOOLTIP'];
