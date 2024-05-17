@@ -14,7 +14,7 @@ import * as Xml from '../core/xml.js';
 import * as fieldRegistry from '../core/field_registry.js';
 import * as xmlUtils from '../core/utils/xml.js';
 import type {Abstract as AbstractEvent} from '../core/events/events_abstract.js';
-import {Align} from '../core/inputs/input.js';
+import {Align} from '../core/inputs/align.js';
 import type {Block} from '../core/block.js';
 import type {BlockSvg} from '../core/block_svg.js';
 import type {BlockCreate} from '../core/events/events_block_create.js';
@@ -40,6 +40,7 @@ import {config} from '../core/config.js';
 import {defineBlocks} from '../core/common.js';
 import '../core/icons/comment_icon.js';
 import '../core/icons/warning_icon.js';
+import * as common from '../core/common.js';
 
 /** A dictionary of the block definitions provided by this module. */
 export const blocks: {[key: string]: BlockDefinition} = {};
@@ -807,7 +808,6 @@ interface CallMixin extends CallMixinType {
   defType_: string;
   quarkIds_: string[] | null;
   quarkConnections_: {[id: string]: Connection};
-  previousEnabledState_: boolean;
 }
 type CallMixinType = typeof PROCEDURE_CALL_COMMON;
 
@@ -816,6 +816,13 @@ type CallExtraState = {
   name: string;
   params?: string[];
 };
+
+/**
+ * The language-neutral ID for when the reason why a block is disabled is
+ * because the block's corresponding procedure definition is disabled.
+ */
+const DISABLED_PROCEDURE_DEFINITION_DISABLED_REASON =
+  'DISABLED_PROCEDURE_DEFINITION';
 
 /**
  * Common properties for the procedure_callnoreturn and
@@ -976,10 +983,9 @@ const PROCEDURE_CALL_COMMON = {
           type: 'field_label',
           text: this.arguments_[i],
         }) as FieldLabel;
-        const input = this.appendValueInput('ARG' + i)
+        this.appendValueInput('ARG' + i)
           .setAlign(Align.RIGHT)
           .appendField(newField, 'ARGNAME' + i);
-        input.init();
       }
     }
     // Remove deleted inputs.
@@ -992,7 +998,6 @@ const PROCEDURE_CALL_COMMON = {
       if (this.arguments_.length) {
         if (!this.getField('WITH')) {
           topRow.appendField(Msg['PROCEDURES_CALL_BEFORE_PARAMS'], 'WITH');
-          topRow.init();
         }
       } else {
         if (this.getField('WITH')) {
@@ -1180,12 +1185,16 @@ const PROCEDURE_CALL_COMMON = {
           );
         }
         Events.setGroup(event.group);
-        if (blockChangeEvent.newValue) {
-          this.previousEnabledState_ = this.isEnabled();
-          this.setEnabled(false);
-        } else {
-          this.setEnabled(this.previousEnabledState_);
-        }
+        const valid = def.isEnabled();
+        this.setDisabledReason(
+          !valid,
+          DISABLED_PROCEDURE_DEFINITION_DISABLED_REASON,
+        );
+        this.setWarningText(
+          valid
+            ? null
+            : Msg['PROCEDURES_CALL_DISABLED_DEF_WARNING'].replace('%1', name),
+        );
         Events.setGroup(oldGroup);
       }
     }
@@ -1214,7 +1223,7 @@ const PROCEDURE_CALL_COMMON = {
         const def = Procedures.getDefinition(name, workspace);
         if (def) {
           (workspace as WorkspaceSvg).centerOnBlock(def.id);
-          (def as BlockSvg).select();
+          common.setSelected(def as BlockSvg);
         }
       },
     });
@@ -1237,7 +1246,6 @@ blocks['procedures_callnoreturn'] = {
     this.argumentVarModels_ = [];
     this.quarkConnections_ = {};
     this.quarkIds_ = null;
-    this.previousEnabledState_ = true;
   },
 
   defType_: 'procedures_defnoreturn',
@@ -1258,7 +1266,6 @@ blocks['procedures_callreturn'] = {
     this.argumentVarModels_ = [];
     this.quarkConnections_ = {};
     this.quarkIds_ = null;
-    this.previousEnabledState_ = true;
   },
 
   defType_: 'procedures_defreturn',
@@ -1274,6 +1281,12 @@ interface IfReturnMixin extends IfReturnMixinType {
   hasReturnValue_: boolean;
 }
 type IfReturnMixinType = typeof PROCEDURES_IFRETURN;
+
+/**
+ * The language-neutral ID for when the reason why a block is disabled is
+ * because the block is only valid inside of a procedure body.
+ */
+const UNPARENTED_IFRETURN_DISABLED_REASON = 'UNPARENTED_IFRETURN';
 
 const PROCEDURES_IFRETURN = {
   /**
@@ -1335,7 +1348,7 @@ const PROCEDURES_IFRETURN = {
     if (
       ((this.workspace as WorkspaceSvg).isDragging &&
         (this.workspace as WorkspaceSvg).isDragging()) ||
-      e.type !== Events.BLOCK_MOVE
+      (e.type !== Events.BLOCK_MOVE && e.type !== Events.BLOCK_CREATE)
     ) {
       return; // Don't change state at the start of a drag.
     }
@@ -1377,7 +1390,7 @@ const PROCEDURES_IFRETURN = {
         // There is no need to record the enable/disable change on the undo/redo
         // list since the change will be automatically recreated when replayed.
         eventUtils.setRecordUndo(false);
-        this.setEnabled(legal);
+        this.setDisabledReason(!legal, UNPARENTED_IFRETURN_DISABLED_REASON);
       } finally {
         eventUtils.setRecordUndo(true);
       }
